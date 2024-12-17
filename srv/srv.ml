@@ -1,5 +1,3 @@
-module T = Domainslib.Task
-
 module Time = struct
   let string_of_local () =
     let z x = if x < 10 then Printf.sprintf "0%d" x else string_of_int x in
@@ -33,7 +31,7 @@ module Socket = struct
           let acc = chunk :: acc in
           if stop chunk then Ok (return acc) else go acc)
       with
-      | exn -> Error exn
+      | exn -> Error (exn, acc)
     in
     go []
   ;;
@@ -48,7 +46,7 @@ module Socket = struct
           let n = Unix.send sock buf sent (len - sent) [] in
           go (sent + n)
         with
-        | exn -> Error exn)
+        | exn -> Error (exn, sent))
     in
     go 0
   ;;
@@ -71,15 +69,13 @@ let listen_tcp ?(config = default_config) () =
   sock
 ;;
 
-let rec accept_loop pool handler sock =
+let rec accept_loop handler sock =
   let () =
     match Unix.accept sock with
-    | client, endpoint ->
-      let _ = T.async pool (fun _ -> handler (client, endpoint)) in
-      ()
+    | client, endpoint -> handler (client, endpoint)
     | exception exn -> Log.error ~ctx:"accept" exn
   in
-  accept_loop pool handler sock
+  accept_loop handler sock
 ;;
 
 let echo_handler (client, endpoint) =
@@ -101,11 +97,11 @@ let echo_handler (client, endpoint) =
     in
     match Socket.send client resp with
     | Ok () -> ()
-    | Error exn -> Log.error ~ctx:"echo send" exn
+    | Error (exn, _) -> Log.error ~ctx:"echo send" exn
   in
   let rec go () =
     match Socket.recv ~stop client with
-    | Error exn -> Log.error ~ctx:"echo recv" exn
+    | Error (exn, _) -> Log.error ~ctx:"echo recv" exn
     | Ok buf ->
       let req = Bytes.to_string buf in
       if close req then Unix.close client else echo req |> go
@@ -113,8 +109,5 @@ let echo_handler (client, endpoint) =
   go ()
 ;;
 
-let () =
-  let num_domains = Domain.recommended_domain_count () in
-  let pool = T.setup_pool ~num_domains:(num_domains - 1) () in
-  accept_loop pool echo_handler @@ listen_tcp ()
-;;
+let () = accept_loop echo_handler @@ listen_tcp ()
+    
